@@ -5,7 +5,7 @@ using LinearAlgebra
 using Yao
 using TensorOperations
 
-export op_0, ident, xxx_hamiltonian, contract, contract2, tensor_from_operator
+export op_0, ident, contract, contract2, tensor_from_operator, simplify_tensor, simplify_tensor_2, tensor_to_matrix, xxx_hamiltonian,get_eigenvalues_and_eigenstates
 
 include("bethecircuit.jl")
 

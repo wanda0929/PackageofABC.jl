@@ -38,8 +38,6 @@ function contract2(C,D,kC,kD)
 end
 
 #将构建的生成算符连接成张量
-#iden = [1 0 0 0; 0 1 0 0; 0 0 1 0; 0 0 0 1]
-
 function tensor_from_operator(M::Int, vars::Vector{Float64})
     op_1 = vars[1] * ident() .+ im * op_0()#单块含参量生成算符
     tensor_op_1 = reshape(op_1, 2, 2, 2, 2)#reshapeb-j-a-i
@@ -59,13 +57,28 @@ function tensor_from_operator(M::Int, vars::Vector{Float64})
             tensor_op_i = reshape(op_i , 2, 2, 2, 2) #把第i个reshapeb-j-a-i
             tensor_op_sum = contract2(tensor_op_sum, tensor_op_i, ((i-3)*2+4), 4)#将前i个的收缩结果代入第二个当中
             return tensor_op_sum
-        end
-        
+        end  
     end
 end
+
+Rmatrix(var) = var * ident() .+ im * op_0()
+function circuit_from_operator(vars::Vector{Float64})
+    M = length(vars)
+    c = chain(M+1)
+    for i in 1:M
+        # `Rmatrix` returns a 4x4 matrix
+        # `matblock` is used to convert it to a gate on 2 qubits
+        # `put` is used to elivate it to a gate on M qubits
+        push!(c, put(M+1, (i, i+1)=>matblock(Rmatrix(vars[i]))))
+    end
+    return c
+end
 #test
-vars = rand(3)
-tensor_from_operator(3, vars)
+#vars = rand(3)
+#tensor_from_operator(3,vars)
+
+
+
 
 # 简化第一个张量
 #如果M=1，那么只有一个张量，不需要简化
@@ -76,36 +89,58 @@ function simplify_tensor(tensor, M::Int)
     simplified_tensor = tensor[output_index, :, input_index, repeat(vec, M-2)..., :, output_index, :] #[j]-a-[i]-[j']-a'-[j'']-a''...b'''-[j''']-a'''
     return simplified_tensor #简化后的张量
 end
+
 # 简化第二个到第M个张量
 function simplify_tensor_2(tensor, M::Int)
     input_index = 1# 固定第一个输入态为 0 态
     simplified_tensor = tensor[:, :, input_index, fill(:, 2*M-1)...] #j-a-[i]-j'-a'-j''-a''...b'''-j'''-a'''
     return simplified_tensor #简化后的张量
 end
-sim = rand(2, 2, 2, 2, 2, 2, 2, 2)
-simplify_tensor_2(sim, 3)-sim[:, :, 1, :, :, :, :, :]
 
-
-# 将高维张量变回矩阵
-function tensor_to_matrix(tensor, input_dims::NTuple{N, Int}, output_dims::NTuple{M, Int}) where {N, M}
-    input_size = prod(input_dims)
-    output_size = prod(output_dims)
-    return reshape(tensor, input_size, output_size)
+# 将高维张量R1变回矩阵
+function tensor_to_matrix1(tensor, new_dims::NTuple{N, Int}) where {N}
+    # 重新排列张量的维度，使得要合并的维度在一起
+    tensor_permuted = permutedims(tensor, new_dims)
+    # 获取张量的尺寸
+    dims = size(tensor_permuted)
+    # 计算合并后的维度
+    merged_dim = prod(dims[1:N-1])
+    single_dim_size = dims[N]
+    
+    # 将张量重新排列成矩阵
+    return reshape(tensor_permuted, single_dim_size, merged_dim)
 end
 
-# 构建包含参数的量子线路
-function parameterized_circuit(k::Vector{Float64}, N::Int)
-    circuit = chain(N)
+# 将高维张量R2-RM变回矩阵
+function tensor_to_matrix2(tensor, new_dims::NTuple{N, Int}) where {N}
+    # 重新排列张量的维度，使得要合并的维度在一起
+    tensor_permuted = permutedims(tensor, new_dims)
+    # 获取张量的尺寸
+    dims = size(tensor_permuted)
+    # 计算合并后的维度
+    merged_dim = prod(dims[1:(N+1)/2])
+    single_dim =prod(dims[(N+3)/2:N])
     
-    
-    return circuit
+    # 将张量重新排列成矩阵
+    return reshape(tensor_permuted, merged_dim, single_dim)
 end
+#tensor = rand(2, 2, 2, 2, 2, 2, 2)
+#tensor_to_matrix2(tensor, (4, 1, 2, 3, 5, 6, 7))
 
-# 使用 QR 分解确保量子线路是幺正的
-function make_unitary(circuit)
-    U, R = qr(mat(circuit))
-    unitary_circuit = matblock(U)
-    return unitary_circuit
+# 生成前N-1个unitary矩阵的量子线路
+function unitary_circuit(Matrix1, Matrix2, vars::Vector{Float64})
+    R_1 = Matrix1; #文中的G_0
+    R_2 = Matrix2; #第2个到第M个R_T
+    M = length(vars)
+    c = chain(M) #定义QR分解过程中的量子线路
+    for i in 1:M-1
+        R_f = kron(eye(),R_1) * R_2 #将G0和R_T相乘
+        Q, R = qr(R_f) #对获得的总矩阵进行QR分解
+        P_i = Matrix(Q) #将获得的unitary矩阵提取出来
+        R_1 = Matrix(R) #将R矩阵提取出来，用于下一次迭代
+        push!(c, put(M, vcat(1:i+1)=>matblock(P_i))) #用unitary矩阵P_i构建量子线路
+    end
+    return transpose(Matrix(c)) #返回前M-1个unitary矩阵组成的量子线路
 end
 
 # 获取 XXX 模型的本征值和本征态
@@ -114,11 +149,14 @@ function get_eigenvalues_and_eigenstates(H)
     return eigenvalues, eigenstates
 end
 
+# xxx模型哈密顿量
 function xxx_hamiltonian(nbit::Int; periodic::Bool)
     map(1:(periodic ? nbit : nbit-1)) do i
         sum([kron(nbit, i=>operator,mod1(i+1, nbit)=>operator) for operator in [X, Y, Z]])
     end |> sum
 end
 
+
+#test
 
 
