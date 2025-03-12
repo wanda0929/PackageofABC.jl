@@ -3,7 +3,6 @@ using Yao
 using LinearAlgebra 
 using TensorOperations
 using OMEinsum
-
 # 导入 PackageofABC 模块
 using PackageofABC
 
@@ -30,7 +29,7 @@ end
 # Test the continued tensor contraction when M=1
 @testset "tensor_from_operator" begin
     op0 = [1 0 0 0; 0 -1 1 0; 0 1 1 0; 0 0 0 -1]
-    vars = rand(1)
+    vars = rand(1)+im*rand(1)
     iden = [1.0 0.0 0.0 0.0; 0.0 1.0 0.0 0.0; 0.0 0.0 1.0 0.0; 0.0 0.0 0.0 1.0]
     op1 = vars[1] * iden .+ im * op0
     @test PackageofABC.tensor_from_operator(1, vars) == reshape(op1, 2, 2, 2, 2)
@@ -39,36 +38,36 @@ end
 # Test the continued tensor contraction when M=2
 @testset "tensor_from_operator" begin
     op0 = [1 0 0 0; 0 -1 1 0; 0 1 1 0; 0 0 0 -1]
-    vars = rand(2)
+    vars = rand(2) + im*rand(2)
     iden = [1.0 0.0 0.0 0.0; 0.0 1.0 0.0 0.0; 0.0 0.0 1.0 0.0; 0.0 0.0 0.0 1.0]
     op1 = vars[1] * iden .+ im * op0
     top1 = reshape(op1, 2, 2, 2, 2)
     op2 = vars[2] * iden .+ im * op0
     top2 = reshape(op2, 2, 2, 2, 2)
-    final = PackageofABC.contract(top1, top2, 1, 4)
+    final = PackageofABC.contract(top1, top2, 2, 4)
     @test PackageofABC.tensor_from_operator(2, vars) == final
 end
 
 # Test the continued tensor contraction when M=3
 @testset "tensor_from_operator" begin
     op0 = [1 0 0 0; 0 -1 1 0; 0 1 1 0; 0 0 0 -1]
-    vars = rand(3)
+    vars = rand(3) + im*rand(3)
     iden = [1.0 0.0 0.0 0.0; 0.0 1.0 0.0 0.0; 0.0 0.0 1.0 0.0; 0.0 0.0 0.0 1.0]
     op1 = vars[1] * iden .+ im * op0
     top1 = reshape(op1, 2, 2, 2, 2)
     op2 = vars[2] * iden .+ im * op0
     top2 = reshape(op2, 2, 2, 2, 2)
-    final = PackageofABC.contract(top1, top2, 1, 4)
+    final = PackageofABC.contract(top1, top2, 2, 4)
     op3 = vars[3] * iden .+ im * op0
     top3 = reshape(op3, 2, 2, 2, 2)
-    final = PackageofABC.contract2(final, top3, 4, 4)
+    final = PackageofABC.contract2(final, top3, 5, 4)
     @test PackageofABC.tensor_from_operator(3, vars) == final
 end
 
 # Test thetensor contraction when M=1
 @testset "simplify_tensor" begin
     sim = rand(2, 2, 2, 2, 2, 2, 2, 2)
-    @test PackageofABC.simplify_tensor(sim, 3) == sim[1, :, 1, 1, :, :, 1, :]
+    @test PackageofABC.simplify_tensor(sim, 3) == sim[1, :, 1, 1, :, 1, :, :]
 end
 
 #Test the tensor contraction when M=2
@@ -93,25 +92,55 @@ end
 
 # test the unitary circuit
 @testset "unitary_circuit" begin
-    Mat1 = rand(2, 8)
-    Mat2 = rand(16,8)
-    vars = rand(3)
+    N = 3
+    Mat1 = rand(2,4)
+    Mat2 = rand(8,4)
+    vars = rand(1) + im*rand(1)
     R_1 = Mat1; #文中的G_0
-    R_2 = Mat2; #第2个到第M个R_T
+    R_2 = Mat2; #第2个到第N个R_T
     M = length(vars)
-    c = chain(M) #定义QR分解过程中的量子线路
+    Matrices = Dict() #用于存储unitary矩阵
+    c = chain(N+M) #定义QR分解过程中的量子线路
     R_f = kron(eye(),R_1) * R_2 #将G0和R_T相乘
     Q, R = qr(R_f) #对获得的总矩阵进行QR分解
     P_i =Matrix(Q) #将获得的unitary矩阵提取出来
     R_1 = Matrix(R)  #将R矩阵提取出来，用于下一次迭代
-    push!(c, put(M, (1,2)=>matblock(P_i))) #用unitary矩阵P_i构建量子线路
+    Matrices["matblock_1"] = P_i
     R_f = kron(eye(),R_1) * R_2 #将G0和R_T相乘
     Q, R = qr(R_f) #对获得的总矩阵进行QR分解
     P_i = Matrix(Q)  #将获得的unitary矩阵提取出来
     R_1 = Matrix(R)  #将R矩阵提取出来，用于下一次迭代
-    push!(c, put(M, (1,2,3)=>matblock(P_i))) #用unitary矩阵P_i构建量子线路
-    p_f = transpose(Matrix(c))
-    @test PackageofABC.unitary_circuit(Mat1, Mat2, vars) == p_f
+    Matrices["matblock_2"] = P_i
+
+    push!(c, put(M, (1,2)=>matblock(Matrices["matblock_1"]))) #用unitary矩阵P_i构建量子线路
+    @test PackageofABC.unitary_circuit(Mat1, Mat2, N, vars) == c
+end
+
+# test the unitary circuit
+@testset "unitary_circuit" begin
+    N = 3
+    Mat1 = rand(2, 4)
+    Mat2 = rand(8,4)
+    vars = rand(2) + im*rand(2)
+    R_1 = Mat1; #文中的G_0
+    R_2 = Mat2; #第2个到第N个R_T
+    M = length(vars)
+    Matrices = Dict() #用于存储unitary矩阵
+    c = chain(N) #定义QR分解过程中的量子线路
+    R_f = kron(eye(),R_1) * R_2 #将G0和R_T相乘
+    Q, R = qr(R_f) #对获得的总矩阵进行QR分解
+    P_i =Matrix(Q) #将获得的unitary矩阵提取出来
+    R_1 = Matrix(R)  #将R矩阵提取出来，用于下一次迭代
+    Matrices["matblock_1"] = P_i
+    R_f = kron(eye(),R_1) * R_2 #将G0和R_T相乘
+    Q, R = qr(R_f) #对获得的总矩阵进行QR分解
+    P_i = Matrix(Q)  #将获得的unitary矩阵提取出来
+    R_1 = Matrix(R)  #将R矩阵提取出来，用于下一次迭代
+    Matrices["matblock_2"] = P_i
+    
+    push!(c, put(N, (2,3)=>matblock(Matrices["matblock_2"]))) #用unitary矩阵P_i构建量子线路
+    push!(c, put(N, (1,2)=>matblock(Matrices["matblock_1"]))) #用unitary矩阵P_i构建量子线路
+    @test PackageofABC.unitary_circuit(Mat1, Mat2, N, vars) == c
 end
 
 # Test the Hamiltonian

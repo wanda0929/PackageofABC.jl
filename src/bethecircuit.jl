@@ -8,7 +8,7 @@ eye() = [1 0; 0 1]  # 单位矩阵
 zero() = [0 0; 0 0]  # 零矩阵
 
 # 构建包含参数的单块生成算符
-op_0() = [sigma_z() sigma_minus(); sigma_plus() sigma_z()]
+op_0() = [sigma_z() sigma_minus(); sigma_plus() -sigma_z()]
 ident() = [eye() zero(); zero() eye()]
 #op_0 = [1 0 0 0; 0 -1 1 0; 0 1 1 0; 0 0 0 -1]
 
@@ -38,7 +38,7 @@ function contract2(C,D,kC,kD)
 end
 
 #将构建的生成算符连接成张量
-function tensor_from_operator(M::Int, vars::Vector{Float64})
+function tensor_from_operator(M::Int, vars::Vector{Complex{Float64}})
     op_1 = vars[1] * ident() .+ im * op_0()#单块含参量生成算符
     tensor_op_1 = reshape(op_1, 2, 2, 2, 2)#reshapeb-j-a-i
     if M == 1
@@ -46,23 +46,23 @@ function tensor_from_operator(M::Int, vars::Vector{Float64})
     elseif M==2 
         op_2 = vars[2] * ident() .+ im * op_0()#第二块含参量生成算符
         tensor_op_2 = reshape(op_2, 2, 2, 2, 2)#reshapeb-j-a-i
-        tensor_op_2 = contract(tensor_op_1, tensor_op_2, 1, 4)#收缩前两个张量
+        tensor_op_2 = contract(tensor_op_1, tensor_op_2, 2, 4)#收缩前两个张量
         return tensor_op_2
     else
         op_2 = vars[2] * ident() .+ im * op_0()
         tensor_op_2 = reshape(op_2, 2, 2, 2, 2)
-        tensor_op_sum =  contract(tensor_op_1, tensor_op_2, 1, 4) #前i-1个的收缩结果
+        tensor_op_sum =  contract(tensor_op_1, tensor_op_2, 2, 4) #前i-1个的收缩结果
         for i in 3:M    
             op_i = vars[i] * ident() .+ im * op_0() #第i块含参量生成算符
             tensor_op_i = reshape(op_i , 2, 2, 2, 2) #把第i个reshapeb-j-a-i
-            tensor_op_sum = contract2(tensor_op_sum, tensor_op_i, ((i-3)*2+4), 4)#将前i个的收缩结果代入第二个当中
-            return tensor_op_sum
+            tensor_op_sum = contract2(tensor_op_sum, tensor_op_i, (2*i-1), 4)#将前i个的收缩结果代入第二个当中
         end  
+        return tensor_op_sum
     end
 end
 
 Rmatrix(var) = var * ident() .+ im * op_0()
-function circuit_from_operator(vars::Vector{Float64})
+function circuit_from_operator(vars::Vector{Complex{Float64}})
     M = length(vars)
     c = chain(M+1)
     for i in 1:M
@@ -86,14 +86,14 @@ function simplify_tensor(tensor, M::Int)
     input_index = 1# 固定第一个输入态为 0 态
     output_index = 1# 固定第一个输出态为 0 态
     vec = [output_index, :] # 用于重复的部分
-    simplified_tensor = tensor[output_index, :, input_index, repeat(vec, M-2)..., :, output_index, :] #[j]-a-[i]-[j']-a'-[j'']-a''...b'''-[j''']-a'''
+    simplified_tensor = tensor[output_index, :, input_index, repeat(vec, M-2)..., output_index, :, :] #[b]-a-[i]-[b']-a'-[b'']-a''...b'''-[j''']-a'''
     return simplified_tensor #简化后的张量
 end
 
 # 简化第二个到第M个张量
 function simplify_tensor_2(tensor, M::Int)
     input_index = 1# 固定第一个输入态为 0 态
-    simplified_tensor = tensor[:, :, input_index, fill(:, 2*M-1)...] #j-a-[i]-j'-a'-j''-a''...b'''-j'''-a'''
+    simplified_tensor = tensor[:, :, input_index, fill(:, 2*M-1)...] #b-a-[i]-b'-a'-b''-a''...b'''-j'''-a'''
     return simplified_tensor #简化后的张量
 end
 
@@ -127,21 +127,62 @@ end
 #tensor = rand(2, 2, 2, 2, 2, 2, 2)
 #tensor_to_matrix2(tensor, (4, 1, 2, 3, 5, 6, 7))
 
-# 生成前N-1个unitary矩阵的量子线路
-function unitary_circuit(Matrix1, Matrix2, vars::Vector{Float64})
+
+
+# 生成unitary矩阵的量子线路
+function unitary_circuit(Matrix1, Matrix2, N::Int, vars::Vector{Complex{Float64}})
     R_1 = Matrix1; #文中的G_0
-    R_2 = Matrix2; #第2个到第M个R_T
+    R_2 = Matrix2; #第2个到第N个R_T
     M = length(vars)
-    c = chain(M) #定义QR分解过程中的量子线路
-    for i in 1:M-1
+    Matrices = Dict()
+    c = chain(N) #定义QR分解过程中的量子线路
+    for i in 1:N-1
         R_f = kron(eye(),R_1) * R_2 #将G0和R_T相乘
         Q, R = qr(R_f) #对获得的总矩阵进行QR分解
         P_i = Matrix(Q) #将获得的unitary矩阵提取出来
         R_1 = Matrix(R) #将R矩阵提取出来，用于下一次迭代
-        push!(c, put(M, vcat(1:i+1)=>matblock(P_i))) #用unitary矩阵P_i构建量子线路
+        Matrices["matblock_$i"] = P_i
+        #push!(c, put(M, vcat(1:i+1)=>matblock(P_i))) #用unitary矩阵P_i构建量子线路
     end
-    return transpose(Matrix(c)) #返回前M-1个unitary矩阵组成的量子线路
+
+    for i in 1:N-M
+        push!(c, put(N, vcat(N-M+2-i:N+1-i)=>matblock(Matrices["matblock_$(N-i)"]))) #用unitary矩阵P_i构建量子线路
+    end
+
+    for i in N-M+1:N-1
+        push!(c, put(N, vcat(1:N-i+1)=>matblock(Matrices["matblock_$(N-i)"])))
+         #用unitary矩阵P_i构建量子线路
+    end
+    return c #返回前M-1个unitary矩阵组成的量子线路
 end
+
+
+function lager_unitary_circuit(Matrix1, Matrix2, N::Int, vars::Vector{Complex{Float64}})
+    R_1 = Matrix1; #文中的G_0
+    R_2 = Matrix2; #第2个到第N个R_T
+    M = length(vars)
+    Matrices = Dict()
+    c = chain(N) #定义QR分解过程中的量子线路
+    for i in 1:N-1
+        R_f = kron(eye(),R_1) * R_2 #将G0和R_T相乘
+        Q, R = qr(R_f) #对获得的总矩阵进行QR分解
+        P_i = Matrix(Q) #将获得的unitary矩阵提取出来
+        R_1 = Matrix(R) #将R矩阵提取出来，用于下一次迭代
+        Matrices["matblock_$i"] = P_i
+        #push!(c, put(M, vcat(1:i+1)=>matblock(P_i))) #用unitary矩阵P_i构建量子线路
+    end
+    for i in 1:N-M+1
+        push!(c, put(M, vcat((N-M)+2-i:N-i+1)=>matblock(Matrices["matblock_$(N-i)"]))) #用unitary矩阵P_i构建量子线路
+    end
+
+    for i in N-M+1:N
+        push!(c, put(M, vcat(1:N+1-i)=>matblock(Matrices["matblock_$(N-i)"]))) #用unitary矩阵P_i构建量子线路
+    end
+    return c #返回前M-1个unitary矩阵组成的量子线路
+end
+
+#
+
 
 # 获取 XXX 模型的本征值和本征态
 function get_eigenvalues_and_eigenstates(H)
@@ -156,7 +197,4 @@ function xxx_hamiltonian(nbit::Int; periodic::Bool)
     end |> sum
 end
 
-
 #test
-
-
